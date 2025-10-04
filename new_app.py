@@ -32,7 +32,7 @@ def load_excel_from_drive(url):
             for col in ['Charge/Unit', 'Expected']:
                 if col in cpt_ref.columns:
                     cpt_ref[col] = pd.to_numeric(
-                        cpt_ref[col].replace('[\$,]', '', regex=True),
+                        cpt_ref[col] = cpt_ref[col].replace(r'[\$,]', '', regex=True),
                         errors='coerce'
                     )
 
@@ -181,3 +181,4 @@ if df is not None:
 
 else:
     st.warning("⚠️ Unable to load data from Google Drive Excel file.")
+
