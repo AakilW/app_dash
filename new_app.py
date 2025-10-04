@@ -9,9 +9,6 @@ from io import BytesIO
 st.set_page_config(page_title="📊 APP Dashboard", layout="wide")
 st.title("📊 APP Client Dashboard")
 
-# Status message
-st.info("📡 Loading data from Google Drive... Please wait a few seconds.")
-
 # -------------------- DATA LOADER --------------------
 file_id = "1PlTbACUnIAOkTzM-m06j_lQvX62kiFKB"
 download_url = f"https://drive.google.com/uc?id={file_id}"
@@ -24,10 +21,10 @@ def load_excel_from_drive(url):
         output.seek(0)
         xls = pd.ExcelFile(output, engine='openpyxl')
 
-        # --- Main Data ---
+        # Main Data
         df = pd.read_excel(xls, sheet_name=xls.sheet_names[0])
 
-        # --- CPT Reference (if exists) ---
+        # CPT Reference (optional if exists)
         cpt_ref = pd.DataFrame()
         if "Sheet1" in xls.sheet_names:
             cpt_ref = pd.read_excel(xls, sheet_name="Sheet1")
@@ -35,7 +32,7 @@ def load_excel_from_drive(url):
             for col in ['Charge/Unit', 'Expected']:
                 if col in cpt_ref.columns:
                     cpt_ref[col] = pd.to_numeric(
-                        cpt_ref[col].replace(r'[\$,]', '', regex=True),
+                        cpt_ref[col].replace('[\$,]', '', regex=True),
                         errors='coerce'
                     )
 
@@ -46,30 +43,25 @@ def load_excel_from_drive(url):
         df['Month'] = df['Visit Date'].dt.to_period('M').astype(str)
         df['Encounter Lag'] = (df['Transaction Date'] - df['Visit Date']).dt.days
         df['CPT Code'] = df['CPT Code'].astype(str).str.strip()
-
-        # CPT Category mapping
         df['CPT Category'] = df['CPT Code'].map(
-            lambda x: 'Initial' if x in ['99304', '99305', '99306']
-            else 'Follow-up' if x in ['99307', '99308', '99309', '99310']
+            lambda x: 'Initial' if x in ['99304','99305','99306'] 
+            else 'Follow-up' if x in ['99307','99308','99309','99310'] 
             else 'Other'
         )
 
-        # Merge CPT reference if available
         if not cpt_ref.empty:
             df = df.merge(cpt_ref, on="CPT Code", how="left")
 
         return df
 
     except Exception as e:
-        st.error(f"❌ Error loading file: {e}")
+        st.error(f"Error loading file: {e}")
         return None
 
 # -------------------- LOAD DATA --------------------
 df = load_excel_from_drive(download_url)
 
 if df is not None:
-    st.success("✅ Data loaded successfully!")
-
     # -------------------- FILTERS --------------------
     st.sidebar.header("🔎 Filters")
     today = datetime.today()
@@ -119,10 +111,8 @@ if df is not None:
     with tab1:
         st.markdown("### 🗓️ Provider Weekly Visit Count")
         weekly = df.groupby(['Provider Name', 'Week'])['Visit ID'].count().reset_index()
-        st.plotly_chart(
-            px.bar(weekly, x='Week', y='Visit ID', color='Provider Name', barmode='group'),
-            use_container_width=True
-        )
+        st.plotly_chart(px.bar(weekly, x='Week', y='Visit ID', color='Provider Name', barmode='group'),
+                        use_container_width=True)
 
         st.markdown("### 🎯 % to Target (Provider)")
         weekly['% to Target'] = (weekly['Visit ID'] / 120) * 100
@@ -134,10 +124,8 @@ if df is not None:
     with tab2:
         st.markdown("### 🏥 Visit Count by Facility (Monthly)")
         monthly_facility = df.groupby(['Facility Name', 'Month'])['Visit ID'].count().reset_index()
-        st.plotly_chart(
-            px.bar(monthly_facility, x='Month', y='Visit ID', color='Facility Name', barmode='stack'),
-            use_container_width=True
-        )
+        st.plotly_chart(px.bar(monthly_facility, x='Month', y='Visit ID', color='Facility Name', barmode='stack'),
+                        use_container_width=True)
 
         st.markdown("### 📊 % to Target (Facility)")
         monthly_facility['% to Target'] = (monthly_facility['Visit ID'] / 120) * 100
@@ -148,23 +136,19 @@ if df is not None:
         st.markdown("### 🚀 New Facility Ramp Tracker")
         ramp = df.groupby(['Facility Name', 'Week'])['Visit ID'].count().reset_index()
         ramp['% Ramp'] = (ramp['Visit ID'] / 120) * 100
-        st.plotly_chart(
-            px.area(ramp, x='Week', y='% Ramp', color='Facility Name'),
-            use_container_width=True
-        )
+        st.plotly_chart(px.area(ramp, x='Week', y='% Ramp', color='Facility Name'),
+                        use_container_width=True)
 
         st.markdown("### 📅 Working Days by Provider")
         working_days = df.groupby(['Provider Name', 'Month'])['Visit Date'].nunique().reset_index()
         working_days.rename(columns={'Visit Date': 'Working Days'}, inplace=True)
-        st.plotly_chart(
-            px.bar(working_days, x='Month', y='Working Days', color='Provider Name', barmode='group'),
-            use_container_width=True
-        )
+        st.plotly_chart(px.bar(working_days, x='Month', y='Working Days', color='Provider Name', barmode='group'),
+                        use_container_width=True)
 
     # ---------------- GROWTH ----------------
     with tab3:
         st.markdown("### ⏱️ CCM Start Delay by Facility")
-        em_codes = ['99304', '99305', '99306', '99307', '99308', '99309', '99310']
+        em_codes = ['99304','99305','99306','99307','99308','99309','99310']
         df_em = df[df['CPT Code'].isin(em_codes)]
         df_99487 = df[df['CPT Code'] == '99487']
 
@@ -180,10 +164,8 @@ if df is not None:
     with tab4:
         st.markdown("### 🕒 Provider Encounter Lag")
         lag_df = df.groupby(['Provider Name', 'Week'])['Encounter Lag'].mean().reset_index()
-        st.plotly_chart(
-            px.line(lag_df, x='Week', y='Encounter Lag', color='Provider Name', markers=True),
-            use_container_width=True
-        )
+        st.plotly_chart(px.line(lag_df, x='Week', y='Encounter Lag', color='Provider Name', markers=True),
+                        use_container_width=True)
 
         st.markdown("### 🧬 Provider CPT Mix – Initial vs Follow-Up")
         cpt_init = df[df['CPT Category'] == 'Initial'].groupby('Provider Name')['Visit ID'].count().reset_index()
@@ -191,17 +173,11 @@ if df is not None:
 
         col1, col2 = st.columns(2)
         with col1:
-            st.plotly_chart(
-                px.pie(cpt_init, names='Provider Name', values='Visit ID',
-                       title='Initial Visits (99304–99306)'),
-                use_container_width=True
-            )
+            st.plotly_chart(px.pie(cpt_init, names='Provider Name', values='Visit ID',
+                                   title='Initial Visits (99304–99306)'), use_container_width=True)
         with col2:
-            st.plotly_chart(
-                px.pie(cpt_follow, names='Provider Name', values='Visit ID',
-                       title='Follow-up Visits (99307–99310)'),
-                use_container_width=True
-            )
+            st.plotly_chart(px.pie(cpt_follow, names='Provider Name', values='Visit ID',
+                                   title='Follow-up Visits (99307–99310)'), use_container_width=True)
 
 else:
     st.warning("⚠️ Unable to load data from Google Drive Excel file.")
