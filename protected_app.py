@@ -9,209 +9,201 @@ from io import BytesIO
 st.set_page_config(page_title="APP Dashboard", layout="wide")
 
 # ---------------- AUTH ----------------
-def login():
+def login_page():
     st.title("Login")
-    st.markdown("Enter your credentials to access the dashboard.")
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-    login_button = st.button("Login")
-
-    if login_button:
-        if username == "streamdash" and password == "Billing@2025":
+    st.markdown("Enter credentials to access the dashboard.")
+    username = st.text_input("Username", key="username")
+    password = st.text_input("Password", type="password", key="password")
+    login_btn = st.button("Login", use_container_width=True)
+    if login_btn:
+        if username == "admin" and password == "admin123":  # Change as needed
             st.session_state["authenticated"] = True
-            st.experimental_rerun()
+            st.rerun()
         else:
-            st.error("Invalid username or password.")
+            st.error("Invalid credentials")
 
-# Initialize session state
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
-# Show login page until authenticated
 if not st.session_state["authenticated"]:
-    login()
+    login_page()
     st.stop()
 
 # ---------------- DATA LOADER ----------------
 file_id = "1PlTbACUnIAOkTzM-m06j_lQvX62kiFKB"
-download_url = f"https://drive.google.com/uc?id={file_id}"
+download_url = f"https://drive.google.com/uc?id={file_id}&export=download"
 
 @st.cache_data
 def load_excel_from_drive(url):
-    try:
-        output = BytesIO()
-        gdown.download(url, output, quiet=True)
-        output.seek(0)
-        xls = pd.ExcelFile(output, engine="openpyxl")
+    output = BytesIO()
+    gdown.download(url, output, quiet=True)
+    output.seek(0)
+    xls = pd.ExcelFile(output, engine="openpyxl")
 
-        df = pd.read_excel(xls, sheet_name=xls.sheet_names[0])
+    df = pd.read_excel(xls, sheet_name=xls.sheet_names[0])
 
-        # Optional CPT Reference
-        cpt_ref = pd.DataFrame()
-        if "Sheet1" in xls.sheet_names:
-            cpt_ref = pd.read_excel(xls, sheet_name="Sheet1")
-            if "CPT Code" in cpt_ref.columns:
-                cpt_ref["CPT Code"] = cpt_ref["CPT Code"].astype(str).str.strip()
-            for col in ["Charge/Unit", "Expected"]:
-                if col in cpt_ref.columns:
-                    cpt_ref[col] = pd.to_numeric(
-                        cpt_ref[col].replace(r"[\$,]", "", regex=True),
-                        errors="coerce"
-                    )
+    # Load optional CPT reference
+    cpt_ref = pd.DataFrame()
+    if "Sheet1" in xls.sheet_names:
+        cpt_ref = pd.read_excel(xls, sheet_name="Sheet1")
+        if "CPT Code" in cpt_ref.columns:
+            cpt_ref["CPT Code"] = cpt_ref["CPT Code"].astype(str).str.strip()
+        for col in ["Charge/Unit", "Expected"]:
+            if col in cpt_ref.columns:
+                cpt_ref[col] = pd.to_numeric(cpt_ref[col].replace(r"[\$,]", "", regex=True), errors="coerce")
 
-        # Preprocessing
-        df["Visit Date"] = pd.to_datetime(df.get("Visit Date"), errors="coerce")
-        df["Transaction Date"] = pd.to_datetime(df.get("Transaction Date"), errors="coerce")
+    # Date parsing
+    for col in ["Visit Date", "Transaction Date"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+
+    # Derived time fields
+    if "Visit Date" in df.columns:
         df["Week"] = df["Visit Date"].dt.to_period("W").astype(str)
         df["Month"] = df["Visit Date"].dt.to_period("M").astype(str)
+    else:
+        df["Week"] = pd.NA
+        df["Month"] = pd.NA
+
+    if {"Visit Date", "Transaction Date"}.issubset(df.columns):
         df["Encounter Lag"] = (df["Transaction Date"] - df["Visit Date"]).dt.days
+    else:
+        df["Encounter Lag"] = pd.NA
+
+    # CPT Classification
+    if "CPT Code" in df.columns:
         df["CPT Code"] = df["CPT Code"].astype(str).str.strip()
+        em_init = {"99304", "99305", "99306"}
+        em_follow = {"99307", "99308", "99309", "99310"}
+        df["CPT Category"] = df["CPT Code"].apply(
+            lambda x: "Initial" if x in em_init else "Follow-up" if x in em_follow else "Other"
+        )
+    else:
+        df["CPT Code"] = pd.NA
+        df["CPT Category"] = pd.NA
 
-        # CPT Category
-        def categorize_cpt(code):
-            if code in ["99304", "99305", "99306"]:
-                return "Initial"
-            elif code in ["99307", "99308", "99309", "99310"]:
-                return "Follow-up"
-            else:
-                return "Other"
-        df["CPT Category"] = df["CPT Code"].map(categorize_cpt)
+    # Merge reference if available
+    if not cpt_ref.empty and "CPT Code" in cpt_ref.columns:
+        df = df.merge(cpt_ref, on="CPT Code", how="left")
 
-        if not cpt_ref.empty:
-            df = df.merge(cpt_ref, on="CPT Code", how="left")
+    if "Visit ID" not in df.columns:
+        df.insert(0, "Visit ID", range(1, len(df) + 1))
 
-        if "Visit ID" not in df.columns:
-            df.insert(0, "Visit ID", range(1, len(df) + 1))
+    return df
 
-        return df
-    except Exception as e:
-        st.error(f"Error loading file: {e}")
-        return None
-
-# ---------------- LOAD DATA ----------------
 df = load_excel_from_drive(download_url)
-if df is None:
-    st.warning("Unable to load data from Google Drive Excel file.")
+
+if df is None or df.empty:
+    st.error("Failed to load dataset.")
     st.stop()
 
 # ---------------- FILTERS ----------------
 st.sidebar.header("Filters")
 today = datetime.today()
 
-dos_filter = st.sidebar.selectbox(
-    "Date of Service (Visit Date)",
-    [
-        "Last 30 Days",
-        "Current Week",
-        "Last 14 Days",
-        "Current Month",
-        "Current Quarter",
-        "Current Year",
-        "Custom Range",
-    ],
+date_option = st.sidebar.selectbox(
+    "Date of Service",
+    ["Last 30 Days", "Current Week", "Last 14 Days", "Current Month", "Current Quarter", "Current Year", "Custom Range"],
 )
 
-if dos_filter == "Last 30 Days":
+if date_option == "Last 30 Days":
     start_date, end_date = today - timedelta(days=30), today
-elif dos_filter == "Current Week":
+elif date_option == "Current Week":
     start_date, end_date = today - timedelta(days=today.weekday()), today
-elif dos_filter == "Last 14 Days":
+elif date_option == "Last 14 Days":
     start_date, end_date = today - timedelta(days=14), today
-elif dos_filter == "Current Month":
+elif date_option == "Current Month":
     start_date, end_date = today.replace(day=1), today
-elif dos_filter == "Current Quarter":
+elif date_option == "Current Quarter":
     q = (today.month - 1) // 3 + 1
     start_date, end_date = datetime(today.year, 3 * (q - 1) + 1, 1), today
-elif dos_filter == "Current Year":
+elif date_option == "Current Year":
     start_date, end_date = datetime(today.year, 1, 1), today
 else:
     start_date = pd.to_datetime(st.sidebar.date_input("Start Date", today - timedelta(days=30)))
     end_date = pd.to_datetime(st.sidebar.date_input("End Date", today))
 
-df = df.query("`Visit Date` >= @start_date and `Visit Date` <= @end_date")
+if "Visit Date" in df.columns:
+    df = df[(df["Visit Date"] >= start_date) & (df["Visit Date"] <= end_date)]
 
-# Sidebar filters
-providers = st.sidebar.multiselect("Provider", sorted(df["Provider Name"].dropna().unique()) if "Provider Name" in df else [])
-facilities = st.sidebar.multiselect("Facility", sorted(df["Facility Name"].dropna().unique()) if "Facility Name" in df else [])
-states = st.sidebar.multiselect("State/Region", sorted(df["State"].dropna().unique()) if "State" in df else [])
-payer_class = st.sidebar.multiselect("Payer Class", sorted(df["Payer Class"].dropna().unique()) if "Payer Class" in df else [])
-encounter_type = st.sidebar.multiselect("Encounter Type", sorted(df["Encounter Type"].dropna().unique()) if "Encounter Type" in df else [])
+filters = {
+    "Provider Name": st.sidebar.multiselect("Provider", sorted(df.get("Provider Name", pd.Series()).dropna().unique())),
+    "Facility Name": st.sidebar.multiselect("Facility", sorted(df.get("Facility Name", pd.Series()).dropna().unique())),
+    "State": st.sidebar.multiselect("State/Region", sorted(df.get("State", pd.Series()).dropna().unique())),
+    "Payer Class": st.sidebar.multiselect("Payer Class", sorted(df.get("Payer Class", pd.Series()).dropna().unique())),
+    "Encounter Type": st.sidebar.multiselect("Encounter Type", sorted(df.get("Encounter Type", pd.Series()).dropna().unique())),
+}
 
-if providers:
-    df = df[df["Provider Name"].isin(providers)]
-if facilities:
-    df = df[df["Facility Name"].isin(facilities)]
-if states:
-    df = df[df["State"].isin(states)]
-if payer_class:
-    df = df[df["Payer Class"].isin(payer_class)]
-if encounter_type:
-    df = df[df["Encounter Type"].isin(encounter_type)]
+for col, selected in filters.items():
+    if selected and col in df.columns:
+        df = df[df[col].isin(selected)]
 
 # ---------------- DASHBOARD ----------------
-st.title("📊 APP Client Dashboard")
 tab1, tab2, tab3, tab4 = st.tabs(["Executive", "Operations", "Growth", "Quality"])
 
-# EXECUTIVE
+# EXECUTIVE TAB
 with tab1:
     st.subheader("Provider Weekly Visit Count")
-    weekly = df.groupby(["Provider Name", "Week"])["Visit ID"].count().reset_index(name="Visit Count")
-    st.plotly_chart(px.bar(weekly, x="Week", y="Visit Count", color="Provider Name", barmode="group"), use_container_width=True)
+    if {"Provider Name", "Week"}.issubset(df.columns):
+        weekly = df.groupby(["Provider Name", "Week"])["Visit ID"].count().reset_index(name="Visit Count")
+        fig = px.bar(weekly, x="Week", y="Visit Count", color="Provider Name", barmode="group")
+        st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("% to Target (Provider)")
-    weekly["% to Target"] = (weekly["Visit Count"] / 120) * 100
-    fig2 = px.bar(weekly, x="Week", y="% to Target", color="Provider Name", barmode="group")
-    fig2.update_yaxes(range=[0, 150])
-    st.plotly_chart(fig2, use_container_width=True)
+        st.subheader("% to Target (Provider)")
+        weekly["% to Target"] = (weekly["Visit Count"] / 120) * 100
+        fig2 = px.bar(weekly, x="Week", y="% to Target", color="Provider Name", barmode="group")
+        fig2.update_yaxes(range=[0, 150])
+        st.plotly_chart(fig2, use_container_width=True)
 
-# OPERATIONS
+# OPERATIONS TAB
 with tab2:
     st.subheader("Visit Count by Facility (Monthly)")
-    monthly_facility = df.groupby(["Facility Name", "Month"])["Visit ID"].count().reset_index(name="Visit Count")
-    st.plotly_chart(px.bar(monthly_facility, x="Month", y="Visit Count", color="Facility Name", barmode="stack"), use_container_width=True)
+    if {"Facility Name", "Month"}.issubset(df.columns):
+        monthly = df.groupby(["Facility Name", "Month"])["Visit ID"].count().reset_index(name="Visit Count")
+        fig3 = px.bar(monthly, x="Month", y="Visit Count", color="Facility Name", barmode="stack")
+        st.plotly_chart(fig3, use_container_width=True)
 
-    st.subheader("% to Target (Facility)")
-    monthly_facility["% to Target"] = (monthly_facility["Visit Count"] / 120) * 100
-    fig4 = px.line(monthly_facility, x="Month", y="% to Target", color="Facility Name", markers=True)
-    fig4.update_yaxes(range=[0, 150])
-    st.plotly_chart(fig4, use_container_width=True)
-
-    st.subheader("New Facility Ramp Tracker")
-    ramp = df.groupby(["Facility Name", "Week"])["Visit ID"].count().reset_index(name="Visit Count")
-    ramp["% Ramp"] = (ramp["Visit Count"] / 120) * 100
-    st.plotly_chart(px.area(ramp, x="Week", y="% Ramp", color="Facility Name"), use_container_width=True)
+        monthly["% to Target"] = (monthly["Visit Count"] / 120) * 100
+        fig4 = px.line(monthly, x="Month", y="% to Target", color="Facility Name", markers=True)
+        fig4.update_yaxes(range=[0, 150])
+        st.plotly_chart(fig4, use_container_width=True)
 
     st.subheader("Working Days by Provider")
-    working_days = df.groupby(["Provider Name", "Month"])["Visit Date"].nunique().reset_index(name="Working Days")
-    st.plotly_chart(px.bar(working_days, x="Month", y="Working Days", color="Provider Name", barmode="group"), use_container_width=True)
+    if {"Provider Name", "Month", "Visit Date"}.issubset(df.columns):
+        work = df.groupby(["Provider Name", "Month"])["Visit Date"].nunique().reset_index(name="Working Days")
+        st.plotly_chart(px.bar(work, x="Month", y="Working Days", color="Provider Name", barmode="group"), use_container_width=True)
 
-# GROWTH
+# GROWTH TAB
 with tab3:
     st.subheader("CCM Start Delay by Facility")
-    em_codes = ["99304", "99305", "99306", "99307", "99308", "99309", "99310"]
-    df_em = df[df["CPT Code"].isin(em_codes)]
-    df_99487 = df[df["CPT Code"] == "99487"]
+    em_codes = {"99304", "99305", "99306", "99307", "99308", "99309", "99310"}
+    if {"CPT Code", "Patient ID", "Visit Date"}.issubset(df.columns):
+        df_em = df[df["CPT Code"].isin(em_codes)]
+        df_ccm = df[df["CPT Code"] == "99487"]
+        if not df_em.empty and not df_ccm.empty:
+            em_first = df_em.sort_values("Visit Date").groupby("Patient ID").first().reset_index()
+            ccm_first = df_ccm.sort_values("Visit Date").groupby("Patient ID").first().reset_index()
+            delay = pd.merge(em_first, ccm_first, on="Patient ID", suffixes=("_EM", "_CCM"))
+            delay["CCM Delay (days)"] = (delay["Visit Date_CCM"] - delay["Visit Date_EM"]).dt.days
+            delay_summary = delay.groupby("Facility Name_EM")["CCM Delay (days)"].mean().reset_index()
+            st.dataframe(delay_summary.style.background_gradient(cmap="RdYlGn_r"))
+        else:
+            st.info("No CCM data found.")
 
-    if not df_em.empty and not df_99487.empty:
-        delay_df = pd.merge(df_em, df_99487, on="Patient ID", suffixes=("_EM", "_99487"))
-        delay_df["CCM Delay"] = (delay_df["Visit Date_99487"] - delay_df["Visit Date_EM"]).dt.days
-        delay_summary = delay_df.groupby("Facility Name_EM")["CCM Delay"].mean().reset_index()
-        st.dataframe(delay_summary.style.background_gradient(cmap="Oranges"))
-    else:
-        st.info("No CCM delay data found.")
-
-# QUALITY
+# QUALITY TAB
 with tab4:
     st.subheader("Provider Encounter Lag")
-    lag_df = df.groupby(["Provider Name", "Week"])["Encounter Lag"].mean().reset_index()
-    st.plotly_chart(px.line(lag_df, x="Week", y="Encounter Lag", color="Provider Name", markers=True), use_container_width=True)
+    if {"Provider Name", "Week", "Encounter Lag"}.issubset(df.columns):
+        lag = df.groupby(["Provider Name", "Week"])["Encounter Lag"].mean().reset_index()
+        st.plotly_chart(px.line(lag, x="Week", y="Encounter Lag", color="Provider Name", markers=True), use_container_width=True)
 
     st.subheader("Provider CPT Mix – Initial vs Follow-Up")
-    cpt_init = df[df["CPT Category"] == "Initial"].groupby("Provider Name")["Visit ID"].count().reset_index(name="Count")
-    cpt_follow = df[df["CPT Category"] == "Follow-up"].groupby("Provider Name")["Visit ID"].count().reset_index(name="Count")
+    if {"Provider Name", "CPT Category"}.issubset(df.columns):
+        init = df[df["CPT Category"] == "Initial"].groupby("Provider Name")["Visit ID"].count().reset_index(name="Count")
+        follow = df[df["CPT Category"] == "Follow-up"].groupby("Provider Name")["Visit ID"].count().reset_index(name="Count")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.plotly_chart(px.pie(cpt_init, names="Provider Name", values="Count", title="Initial Visits (99304–99306)"), use_container_width=True)
-    with col2:
-        st.plotly_chart(px.pie(cpt_follow, names="Provider Name", values="Count", title="Follow-up Visits (99307–99310)"), use_container_width=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(px.pie(init, names="Provider Name", values="Count", title="Initial Visits"), use_container_width=True)
+        with c2:
+            st.plotly_chart(px.pie(follow, names="Provider Name", values="Count", title="Follow-Up Visits"), use_container_width=True)
