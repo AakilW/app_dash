@@ -10,7 +10,7 @@ st.set_page_config(page_title="📊 APP Dashboard", layout="wide")
 st.title("📊 APP Client Dashboard")
 
 # -------------------- DATA LOADER --------------------
-file_id = ""
+file_id = "1PlTbACUnIAOkTzM-m06j_lQvX62kiFKB"
 download_url = f"https://drive.google.com/uc?id={file_id}"
 
 @st.cache_data
@@ -181,4 +181,5 @@ if df is not None:
 
 else:
     st.warning("⚠️ Unable to load data from Google Drive Excel file.")
+
 
