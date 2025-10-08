@@ -14,12 +14,12 @@ def login():
     st.markdown("Enter credentials to access the dashboard.")
     username = st.text_input("Username", key="username")
     password = st.text_input("Password", type="password", key="password")
-    if st.button("Login"):
-        if username == "streamdash" and password == "Billing@2025":
-            st.session_state["authenticated"] = True
-            st.experimental_rerun()
-        else:
-            st.error("Invalid credentials. Access denied.")
+        if st.button("Login"):
+            if username == "streamdash" and password == "Billing@2025":
+                st.session_state["authenticated"] = True
+                st.rerun()  # <— replace experimental_rerun()
+            else:
+                st.error("Invalid credentials. Access denied.")
 
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
